@@ -11,30 +11,18 @@ db.defaults({ users: [], questions: [] })
 const Discord = require('discord.js');
 const bot = new Discord.Client();
 
+// à mettre dans le bot_config.json
+let guild_id = '665226913291436082'
 let bot_channel_id = '665226913291436085'
 let acces_query_cmd = '//access'
-let number_of_query_to_resolve = 5;
-let minimal_points_to_get_accepted = 4;
+let number_of_query_to_resolve = 5
+let minimal_points_to_get_accepted = 4
+let validated_member_role_id = '665256238585479176'
+
 
 
 // pour charger le token
 let config = require('./config.json')
-
-
-/*
-user : {
-    str: id,
-    str: futur_valid_response
-    int: question_counter,   [1; 5]
-    int: good_answer_counter,
-    bool is_validated,
-    int start_challenge_timestamp,
-    bool is_doing_challenge,
-    int attempt
-}
-*/
-
-
 
 function get_user_object(user_id) {
     return db.get('users')
@@ -47,6 +35,8 @@ function get_user(user_id) {
         .value()
 }
 
+
+// crée un nouvelle uttilistateur dans la db / remet les champs nécéssaire au test à 0 
 function reset_user(id) {
     // nouvel uttilisateur non enregistré 
     if (get_user(id) == undefined) {
@@ -62,44 +52,46 @@ function reset_user(id) {
         db.get('users')
             .push(new_user)
             .write()
-
     } else {
         // uttilisateur déjà entregistré
-        let updated_user = get_user(id)
-        update_user.attempt = update_user.attempt + 1
-
-        update_user(id, updated_user)
+        get_user_object(id)
+            .assign({
+                id: id,
+                futur_valid_response: '',
+                query_counter: 0,
+                points: 0,
+                attempt: ++get_user(id).attempt,
+                start_timestamp: Date.now(),
+                is_validated: get_user(id).is_validated,
+            }).write()
     }
 }
 
 
-
+// pour la génération des questions
 function generate_str_query() {
     let new_query = {
-        question: '5+5  = ',
+        question: '5+5=?',
         response: '10'
     }
     return new_query
 }
 
 
-
-function update_user(user_id, new_user) {
-    db.get('users')
-        .find({ id: user_id })
-        .assign(new_user)
-        .value()
+function approve_user(discord_user) {
+    let guild = bot.guilds.get(guild_id)
+    let validated_member_role = guild.roles.find('name', 'validé')
+    discord_user.addRole(validated_member_role).catch(console.error)
 }
 
 
-
 function public_log(message) {
+    // rajouter un embed
     let channel = bot.channels.get(bot_channel_id).send(message)
 }
 
 
-
-// pour la première question
+// pour la toues première question qui necéssite pas la validation la vérification de la réponse à la question posé précédement
 function first_query(discord_user) {
     let db_user_obj = get_user_object(discord_user.id)
     let db_user = get_user(discord_user.id)
@@ -121,9 +113,6 @@ function first_query(discord_user) {
 function query(discord_user, response) {
     let db_user_obj = get_user_object(discord_user.id)
     let db_user = get_user(discord_user.id)
-    console.log(db_user)
-    console.log('----------')
-    console.log(db_user_obj)
 
     if (response == db_user.futur_valid_response) {
         db_user_obj.assign({ points: ++db_user.points }).write() // on ajoute un point au l'uttilisateur
@@ -145,34 +134,45 @@ function query(discord_user, response) {
 
 
 // gère l'uttilisateur
-function manage(user, msg) {
+function manage_channel_msg(user) {
     let db_user = get_user(user.id)
     // si l'uttilisateur n'existe pas
-    if (db_user == undefined) {
+    if (db_user == undefined || db_user.query_counter == 0) {
         reset_user(user.id)        // on crée l'uttilisateur dans la db
         first_query(user)
     }
-    //   si l'uttilisateur exiset mais n'as jamais réalisé de test ou à échoué à son dernier test
-    else if (db_user == undefined && db_user.query_counter == 0) {
-        reset_user(user.id)        // on crée l'uttilisateur dans la db
-        first_query(user)
-
-    } 
-    // si l'uttilisateur est entrain de passer le test
-    else if (db_user.query_counter < number_of_query_to_resolve) {
-        query(user.id, msg)     // ça check la dernière réponse et en demande une autre
-    } else if ((db_user.query_counter == number_of_query_to_resolve)) {
-        if (db_user.points >= minimal_points_to_get_accepted) {
-            public_log(`${user} à reussit le test d'entrée au bout de ${db_user.attempt} tentative`)
-        } else {
-            public_log(`${user} à échoué au test d'entrée (tentative n°${db_user.attempt}`)
-        }
-        // mtn il faut reset le mec dans la db
-        reset_user(user.id)
-    }
-
 }
 
+
+function manage_dm(user, msg) {
+    let db_user = get_user(user.id)
+
+    // si l'uttilisateur est entrain de passer le test
+    if (db_user.query_counter < number_of_query_to_resolve && db_user.query_counter > 0) {
+        query(user, msg)     // ça check la dernière réponse et en demande une autre
+    }
+
+    else if ((db_user.query_counter == number_of_query_to_resolve)) {
+
+        if (db_user.points >= minimal_points_to_get_accepted) {
+            get_user_object(user.id).assign({ is_validated: true }).write()
+            approve_user(user)
+
+            let embed = new Discord.RichEmbed()
+                .setColor("#7bd039")
+                .setTitle(`✅ Success:`)
+                .setDescription(`${user} à reussit le test d'entrée au bout de ${db_user.attempt} tentative`)
+            public_log(embed)
+        } else {
+            let embed = new Discord.RichEmbed()
+                .setColor("#dd2e44")
+                .setTitle(`❌ Fail:`)
+                .setDescription(`${user} à échoué au test d'entrée avec le score de ${db_user.points}/${number_of_query_to_resolve} (tentative n°${db_user.attempt})`)
+            public_log(embed)
+        }
+        reset_user(user.id)     // on reset l'user dans la db
+    }
+}
 
 
 bot.on('ready', () => {
@@ -180,18 +180,23 @@ bot.on('ready', () => {
 });
 
 
-
 bot.on('message', msg => {
-    let user_id = msg.author.id
+    // pour initialiser le test
+    console.log(msg.content)
     if (msg.content == acces_query_cmd && msg.channel.id == bot_channel_id) {
-        public_log(`${msg.author} à lancé le test d'entrée`)
-        manage(msg.author, '')
+        msg.delete()
+        let embed = new Discord.RichEmbed()
+        .setColor("#7bd039")
+        .setTitle(`♻️ tri en cours:`)
+        .setDescription(`${msg.author} viens de lancer le test d'entrée`)
+        public_log(embed)
+        manage_channel_msg(msg.author)
+        
     }
 
-
-    // pour récupéré les réponses en messages privées
-    if (msg.channel.type == 'dm' && (get_user(user_id) != undefined)) {
-        manage(msg.author, msg.content)
+    // pour récupéré les réponses en messages privées des uttilisateurs entrain de faire le test
+    if (msg.channel.type == 'dm' && get_user(msg.author.id) != undefined) {
+        manage_dm(msg.author, msg.content)
     }
 });
 
