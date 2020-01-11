@@ -1,0 +1,12 @@
+```
+mettre a à 0
+mettre b à 5
+
+pour k allant de 2 à -1 avec un pas de -1
+    a = a + (b-1)
+    b = b + 1
+
+afficher (a + 2)
+```
+
+Qu'affiche l'algorithme si-dessus ?
